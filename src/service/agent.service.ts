@@ -13,6 +13,7 @@ import { HistoryService } from 'src/service/history.service';
 export class AgentService {
     private currentSessionId: string;
     private readonly logger = new Logger(AgentService.name);
+    private readonly MAX_STEPS = 100;
 
     constructor(
         private terminal: TerminalService,
@@ -41,111 +42,83 @@ export class AgentService {
      * @param userInput Đầu vào từ người dùng
      * @returns Kết quả thực thi lệnh hoặc lỗi
      */
-    async chat(userInput: string): Promise<TerminalExecutionResult | string> {
-        if (!this.currentSessionId) {
-            await this.initSession();
-        }
+    async chat(userInput: string): Promise<string> {
+        if (!this.currentSessionId) await this.initSession();
 
-        try {
-            // ============ BƯỚC 1: Lưu câu hỏi của User ============
-            this.logger.debug(`User input: ${userInput}`);
-            await this.historyService.saveMessage(this.currentSessionId, {
-                role: 'user',
-                content: userInput,
-            });
+        const relevantSkills = this.skillLoader.getRelevantSkills(userInput);
 
-            // ============ BƯỚC 2: Lấy context hội thoại gần nhất ============
-            // Mỗi "lượt" gồm 1 User + 1 Assistant -> Lấy 4 messages
-            const previousContext = await this.historyService.getContext(this.currentSessionId, 4);
-            const sortedContext = previousContext.reverse();
+        // Lưu yêu cầu ban đầu của User
+        await this.historyService.saveMessage(this.currentSessionId, {
+            role: 'user',
+            content: userInput,
+        });
 
-            // ============ BƯỚC 3: Chuẩn bị System Prompt ============
-            const relevantSkills = this.skillLoader.getRelevantSkills(userInput);
-            const systemMessage = {
-                role: 'system',
-                content: `
-                    Bạn là một Terminal AI Agent thông minh.
-                    Thông tin:
-                    - Người dùng: ${env.get('user_name')}
-                    - Thư mục làm việc: ${env.get('agent_work_dir')}
-                    - Kỹ năng có sẵn: ${Array.isArray(relevantSkills) ? relevantSkills.join(', ') : relevantSkills}
+        let currentStep = 0;
+        let lastResult = "";
+        let isComplete = false;
 
-                    Hướng dẫn:
-                    - Phân tích yêu cầu của người dùng cẩn thận.
-                    - Chỉ thực thi các lệnh an toàn và hợp lệ.
-                    - Nếu lệnh bị từ chối (security policy), hãy giải thích và đề xuất lệnh thay thế.
-                    - Cung cấp phản hồi rõ ràng về kết quả thực thi.
-                `,
-            };
+        this.logger.log(`🚀 Starting reasoning chain for: "${userInput}"`);
 
-            // ============ BƯỚC 4: Build mảng messages cuối cùng ============
-            const finalMessages = [
+        while (currentStep < this.MAX_STEPS && !isComplete) {
+            currentStep++;
+            this.logger.debug(`Step ${currentStep}/${this.MAX_STEPS}...`);
+
+            // 1. Lấy Context hội thoại (Bao gồm cả kết quả các bước trước trong vòng lặp này)
+            const history = await this.historyService.getContext(this.currentSessionId, 6);
+            const sortedContext = history.reverse();
+
+            // 2. Cập nhật System Prompt với chỉ dẫn về "DONE" và "ASK_HUMAN"
+            const systemMessage = this.buildLoopSystemPrompt(userInput, relevantSkills);
+
+            const messages = [
                 systemMessage,
                 ...sortedContext.map(m => ({
                     role: m.role,
-                    content: m.role === 'assistant'
-                        ? this.formatAssistantContent(m)
-                        : m.content
+                    content: m.role === 'assistant' ? this.formatAssistantContent(m) : m.content
                 })),
-                { role: 'user', content: userInput }
             ];
 
-            // ============ BƯỚC 5: Gọi LLM để lấy lệnh ============
-            this.logger.debug('Calling LLM API...');
-            const llmResponse = await this.callLLM(finalMessages);
+            // 3. Gọi LLM
+            const llmResponse = await this.callLLM(messages);
+            const rawContent = llmResponse.trim();
 
-            if (!llmResponse) {
-                throw new BadRequestException('LLM returned empty response');
+            // 4. Kiểm tra điều kiện dừng (Trigger)
+            if (rawContent.includes('DONE')) {
+                this.logger.log('🏁 Agent flagged task as COMPLETED.');
+                isComplete = true;
+                break;
             }
 
-            const command = this.sanitizeCommand(llmResponse);
-
-            if (!command) {
-                throw new BadRequestException('No valid command extracted from LLM response');
+            if (rawContent.includes('ASK_HUMAN')) {
+                this.logger.log('❓ Agent is waiting for human input.');
+                this.logger.log("Agent ask: ", rawContent)
+                isComplete = true; // Thoát vòng lặp để chờ user nhập tiếp từ Terminal
+                return "Agent đang chờ phản hồi từ bạn...";
             }
 
-            this.logger.log(`📋 LLM suggested: ${command}`);
+            // 5. Nếu không phải trigger dừng, coi đó là một lệnh Terminal
+            const command = this.sanitizeCommand(rawContent);
+            this.logger.log(`🤖 [Step ${currentStep}] Executing: ${command}`);
 
-            // ============ BƯỚC 6: Thực thi lệnh ============
             const executionResult = await this.terminal.execute(command, 30000);
 
-            // ============ BƯỚC 7: Xử lý kết quả thực thi ============
-            const assistantMessage = this.buildAssistantMessage(command, executionResult);
-
+            // 6. Lưu kết quả bước này vào History để bước sau LLM đọc được
             await this.historyService.saveMessage(this.currentSessionId, {
                 role: 'assistant',
-                content: assistantMessage.content,
+                content: `Step ${currentStep}: Executed ${command}`,
                 command: command,
                 output: executionResult.stdout || executionResult.stderr,
-                metadata: {
-                    success: executionResult.success,
-                    exitCode: executionResult.exitCode,
-                    duration: executionResult.duration,
-                    message: executionResult.message,
-                },
+                metadata: { success: executionResult.success }
             });
 
-            this.logger.log(
-                `${executionResult.success ? '✓' : '✗'} Command executed in ${executionResult.duration}ms`
-            );
-
-            return executionResult;
-        } catch (error: any) {
-            this.logger.error('Chat error:', error);
-            const errorMessage = this.handleChatError(error);
-
-            // Lưu lỗi vào history để có context cho lần sau
-            await this.historyService.saveMessage(this.currentSessionId, {
-                role: 'assistant',
-                content: errorMessage,
-                metadata: {
-                    success: false,
-                    error: error.message,
-                },
-            });
-
-            return errorMessage;
+            lastResult = executionResult.stdout || executionResult.stderr;
         }
+
+        if (currentStep >= this.MAX_STEPS) {
+            this.logger.warn('⚠️ Reached maximum reasoning steps.');
+        }
+
+        return lastResult || "Task initiated.";
     }
 
     /**
@@ -266,5 +239,49 @@ export class AgentService {
     resetSession(): void {
         this.currentSessionId = '';
         this.logger.log('📝 Session reset');
+    }
+
+    private buildLoopSystemPrompt(originalGoal: string, skills: string) {
+        return {
+            role: 'system',
+            content: `
+                # ROLE: Senior Coding Agent (Local LLM, Native VM)
+
+                ## MISSION
+                - Thực hiện đúng mục tiêu người dùng với chất lượng production.
+                - Tối ưu cho 3 chuyên môn chính: coding, file CRUD, technical research.
+                - Tránh lặp hành động; ưu tiên giải pháp có thể kiểm chứng được.
+
+                KỸ NĂNG BẠN CÓ:
+                ${skills}
+
+                Mục tiêu hiện tại: "${originalGoal}"
+
+                 ## EXECUTION POLICY
+                1. **Ưu tiên ý định user (cao nhất)**: Mọi hành động phải bám trực tiếp vào yêu cầu mới nhất của user.
+                2. **Thứ tự ưu tiên khi xung đột**:
+                    - (a) Yêu cầu user hiện tại
+                    - (b) Ràng buộc an toàn/bảo mật bắt buộc
+                    - (c) Các guideline tối ưu (coding standards, self-correction)
+                3. Không mở rộng scope ngoài yêu cầu user nếu user chưa yêu cầu rõ.
+                4. Discover đúng phạm vi bằng \`read_structure\` hoặc \`search_grep\` trước khi sửa.
+                5. Chọn đúng tool theo chuyên môn, không trộn mục đích.
+                6. Sau thay đổi code, ưu tiên chạy kiểm chứng tối thiểu (build/test/lint nếu khả thi).
+                7. Nếu thất bại lặp lại, đổi chiến thuật; chỉ \`ask_human\` khi thật sự cần.
+                8. Chỉ dùng \`done\` khi mục tiêu đã hoàn tất hoặc user xác nhận dừng.
+
+                ## USER-INTENT LOCK (BẮT BUỘC)
+                - Trước mỗi quyết định, tự kiểm tra: "Hành động này có phục vụ trực tiếp mục tiêu user không?"
+                - Nếu câu trả lời là "không rõ", phải \`ask_human\` để làm rõ thay vì tự suy diễn.
+                - Không được ưu tiên làm "đẹp kiến trúc" hay "tối ưu thêm" nếu user chưa yêu cầu.
+                - Khi có nhiều việc, luôn làm mục quan trọng nhất theo yêu cầu user trước.
+                
+                QUY TRÌNH SUY LUẬN:
+                1. Nếu bạn cần thông tin, hãy đưa ra lệnh terminal để lấy thông tin (ls, cat, grep...).
+                2. Nếu đã có thông tin, hãy thực hiện hành động tiếp theo.
+                3. Nếu ĐÃ HOÀN THÀNH mục tiêu, hãy trả về duy nhất từ khóa: DONE
+                4. Nếu cần sự giúp đỡ của con người hoặc bị kẹt, hãy trả về: ASK_HUMAN <lý do>
+            `
+        };
     }
 }

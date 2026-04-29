@@ -6,6 +6,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { Session } from './entities/session.entity';
 import { Message } from './entities/message.entity';
 
+import * as Services from "./service"
+import * as Repository from "./repository"
+
 @Module({
   imports: [
     TypeOrmModule.forRoot({
@@ -21,6 +24,6 @@ import { Message } from './entities/message.entity';
     }),
   ],
   controllers: [AppController],
-  providers: [AppService, { provide: "ENV", useValue: env.getProperties() }],
+  providers: [AppService, ...Object.values(Repository), ...Object.values(Services), { provide: "ENV", useValue: env.getProperties() }],
 })
 export class AppModule { }

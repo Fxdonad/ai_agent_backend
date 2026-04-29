@@ -19,7 +19,7 @@ export class Message {
     @Column({ type: 'text', nullable: true })
     output: string;
 
-    @Column({ type: 'jsonb', nullable: true })
+    @Column({ type: 'json', nullable: true })
     metadata: any;
 
     @CreateDateColumn()

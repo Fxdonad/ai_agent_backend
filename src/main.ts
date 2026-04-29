@@ -1,7 +1,7 @@
 // src/main.ts
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { AgentService } from './modules/agent/agent.service';
+import { AgentService } from './service/agent.service';
 import * as readline from 'readline';
 
 async function bootstrap() {

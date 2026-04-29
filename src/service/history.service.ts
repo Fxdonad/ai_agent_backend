@@ -1,35 +1,26 @@
 // src/modules/history/history.service.ts
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
 import { Message } from 'src/entities/message.entity';
 import { Session } from 'src/entities/session.entity';
+import { MessageRepository, SessionRepository } from 'src/repository';
 import { Repository } from 'typeorm';
 
 @Injectable()
 export class HistoryService {
     constructor(
-        @InjectRepository(Session) private sessionRepo: Repository<Session>,
-        @InjectRepository(Message) private messageRepo: Repository<Message>,
+        private readonly sessionRepo: SessionRepository,
+        private readonly messageRepo: MessageRepository,
     ) { }
 
-    async createSession(title: string) {
-        const session = this.sessionRepo.create({ title });
-        return this.sessionRepo.save(session);
+    createSession(title: string) {
+        return this.sessionRepo.createSession(title);
     }
 
-    async saveMessage(sessionId: string, data: Partial<Message>) {
-        const message = this.messageRepo.create({
-            ...data,
-            session: { id: sessionId } as Session,
-        });
-        return this.messageRepo.save(message);
+    saveMessage(sessionId: string, data: any) {
+        return this.messageRepo.saveMessage(sessionId, data);
     }
 
-    async getContext(sessionId: string, limit = 5) {
-        return this.messageRepo.find({
-            where: { session: { id: sessionId } },
-            order: { createdAt: 'DESC' },
-            take: limit,
-        });
+    getContext(sessionId: string, limit = 5) {
+        return this.messageRepo.getContext(sessionId, limit);
     }
 }

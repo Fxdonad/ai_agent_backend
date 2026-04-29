@@ -1,7 +1,7 @@
 // src/modules/agent/agent.service.ts
 import { Injectable } from '@nestjs/common';
 import axios from 'axios';
-import env from '../../environment';
+import env from '../environment';
 import { TerminalService } from './terminal.service';
 import { SkillLoaderService } from './skill-loader.service';
 import { HistoryService } from 'src/service/history.service';

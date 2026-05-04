@@ -5,6 +5,7 @@ import env from '../environment';
 import { TerminalService, TerminalExecutionResult } from './terminal.service';
 import { SkillLoaderService } from './skill-loader.service';
 import { HistoryService } from 'src/service/history.service';
+import { Gemma4e4bConfig } from 'src/config/model.config';
 
 /**
  * Agent Service - Orchestrates LLM interaction with Terminal execution
@@ -37,88 +38,114 @@ export class AgentService {
         }
     }
 
-    /**
-     * Xử lý chat từ người dùng
-     * @param userInput Đầu vào từ người dùng
-     * @returns Kết quả thực thi lệnh hoặc lỗi
-     */
     async chat(userInput: string): Promise<string> {
         if (!this.currentSessionId) await this.initSession();
-
+        
         const relevantSkills = this.skillLoader.getRelevantSkills(userInput);
-
-        // Lưu yêu cầu ban đầu của User
-        await this.historyService.saveMessage(this.currentSessionId, {
-            role: 'user',
-            content: userInput,
-        });
+        await this.historyService.saveMessage(this.currentSessionId, { role: 'user', content: userInput });
 
         let currentStep = 0;
-        let lastResult = "";
-        let isComplete = false;
-
-        this.logger.log(`🚀 Starting reasoning chain for: "${userInput}"`);
-
-        while (currentStep < this.MAX_STEPS && !isComplete) {
+        
+        while (currentStep < this.MAX_STEPS) {
             currentStep++;
-            this.logger.debug(`Step ${currentStep}/${this.MAX_STEPS}...`);
-
-            // 1. Lấy Context hội thoại (Bao gồm cả kết quả các bước trước trong vòng lặp này)
-            const history = await this.historyService.getContext(this.currentSessionId, 6);
-            const sortedContext = history.reverse();
-
-            // 2. Cập nhật System Prompt với chỉ dẫn về "DONE" và "ASK_HUMAN"
-            const systemMessage = this.buildLoopSystemPrompt(userInput, relevantSkills);
-
+            const history = await this.historyService.getContext(this.currentSessionId, 8);
             const messages = [
-                systemMessage,
-                ...sortedContext.map(m => ({
+                this.buildLoopSystemPrompt(userInput, relevantSkills),
+                ...history.reverse().map(m => ({
                     role: m.role,
                     content: m.role === 'assistant' ? this.formatAssistantContent(m) : m.content
-                })),
+                }))
             ];
 
-            // 3. Gọi LLM
-            const llmResponse = await this.callLLM(messages);
-            const rawContent = llmResponse.trim();
+            const llmRawResponse = await this.callLLM(messages);
+            const parsed = this.safeParseJSON(llmRawResponse);
+            if (!parsed) return "AI trả về định dạng không hợp lệ.";
 
-            // 4. Kiểm tra điều kiện dừng (Trigger)
-            if (rawContent.includes('DONE')) {
-                this.logger.log('🏁 Agent flagged task as COMPLETED.');
-                isComplete = true;
-                break;
+            const { thought, tool, parameters } = parsed;
+            this.logger.log(`Step ${currentStep} | 🧠: ${thought}`);
+
+            // Xử lý thoát sớm
+            if (tool === 'done') return parameters.summary || "Hoàn thành.";
+            if (tool === 'ask_human') return `Agent cần hỗ trợ: ${parameters.message}`;
+
+            // Thực thi hành động
+            let result = "";
+            let displayCommand = "";
+
+            if (tool === 'file_operation') {
+                displayCommand = `File: ${parameters.action} ${parameters.path}`;
+                result = await this.handleFileOperation(parameters);
+            } else {
+                displayCommand = parameters.command || this.mapToolToCommand(tool, parameters);
+                const exec = await this.terminal.execute(displayCommand, parameters.timeout_ms || 30000);
+                result = exec.stdout || exec.stderr || exec.message;
             }
 
-            if (rawContent.includes('ASK_HUMAN')) {
-                this.logger.log('❓ Agent is waiting for human input.');
-                this.logger.log("Agent ask: ", rawContent)
-                isComplete = true; // Thoát vòng lặp để chờ user nhập tiếp từ Terminal
-                return "Agent đang chờ phản hồi từ bạn...";
-            }
-
-            // 5. Nếu không phải trigger dừng, coi đó là một lệnh Terminal
-            const command = this.sanitizeCommand(rawContent);
-            this.logger.log(`🤖 [Step ${currentStep}] Executing: ${command}`);
-
-            const executionResult = await this.terminal.execute(command, 30000);
-
-            // 6. Lưu kết quả bước này vào History để bước sau LLM đọc được
-            await this.historyService.saveMessage(this.currentSessionId, {
-                role: 'assistant',
-                content: `Step ${currentStep}: Executed ${command}`,
-                command: command,
-                output: executionResult.stdout || executionResult.stderr,
-                metadata: { success: executionResult.success }
-            });
-
-            lastResult = executionResult.stdout || executionResult.stderr;
+            // Lưu bước đi vào history
+            await this.saveStep(tool, thought, displayCommand, result);
         }
+        return "Đã đạt giới hạn xử lý tối đa.";
+    }
 
-        if (currentStep >= this.MAX_STEPS) {
-            this.logger.warn('⚠️ Reached maximum reasoning steps.');
+    private mapToolToCommand(tool: string, parameters: any): string {
+        switch (tool) {
+            case 'read_structure':
+                // Sử dụng find hoặc ls tùy vào logic bạn muốn
+                const depth = parameters.max_depth || 2;
+                return `find . -maxdepth ${depth} -not -path '*/.*'`;
+
+            case 'search_grep':
+                const pattern = parameters.query || '';
+                const path = parameters.path || '.';
+                return `grep -rnw "${path}" -e "${pattern}"`;
+
+            case 'web_search':
+                // Kết hợp với Brave API key từ env
+                const query = encodeURIComponent(parameters.query || '');
+                return `curl -s -H "X-Subscription-Token: ${env.get('brave_search_api_key')}" "https://api.search.brave.com/res/v1/web/search?q=${query}"`;
+
+            default:
+                // Nếu AI đã cung cấp sẵn trường command thì dùng luôn
+                if (parameters.command) return parameters.command;
+
+                throw new Error(`Tool ${tool} không biết cách chuyển đổi thành lệnh terminal.`);
         }
+    }
 
-        return lastResult || "Task initiated.";
+    private safeParseJSON(text: string) {
+        try {
+            const clean = text.replace(/```json|```/g, '').trim();
+            return JSON.parse(clean);
+        } catch (e) {
+            this.logger.error("JSON Parse Error", text);
+            return null;
+        }
+    }
+
+    private async handleFileOperation(params: any): Promise<string> {
+        const { action, path, content } = params;
+        
+        // Chống lỗi khi content có ký tự đặc biệt bằng cách dùng file tạm hoặc kĩ thuật heredoc
+        switch (action) {
+            case 'read': return (await this.terminal.execute(`cat "${path}"`)).stdout;
+            case 'list': return (await this.terminal.execute(`ls -F "${path}"`)).stdout;
+            case 'mkdir': return (await this.terminal.execute(`mkdir -p "${path}"`)).message;
+            case 'delete': return (await this.terminal.execute(`rm -rf "${path}"`)).message;
+            case 'write':
+                // Sử dụng kĩ thuật base64 để ghi file an toàn tuyệt đối, không sợ vướng ký tự đặc biệt
+                const base64Content = Buffer.from(content).toString('base64');
+                return (await this.terminal.execute(`echo "${base64Content}" | base64 -d > "${path}"`)).message;
+            default: return "Action không hợp lệ";
+        }
+    }
+
+    private async saveStep(tool: string, thought: string, command: string, result: string) {
+        await this.historyService.saveMessage(this.currentSessionId, {
+            role: 'assistant',
+            content: `[${tool.toUpperCase()}] Thought: ${thought}`,
+            command: command,
+            output: result,
+        });
     }
 
     /**
@@ -132,6 +159,7 @@ export class AgentService {
                     messages,
                     temperature: 0.1,
                     max_tokens: 500,
+                    response_format: Gemma4e4bConfig.structureResponse,
                 },
                 { timeout: 600000 }
             );
@@ -143,19 +171,6 @@ export class AgentService {
                 `LLM connection error: ${error.message}`
             );
         }
-    }
-
-    /**
-     * Vệ sinh và trích xuất lệnh từ response của LLM
-     */
-    private sanitizeCommand(response: string): string {
-        return response
-            .trim()
-            .replace(/```bash\n?/g, '')
-            .replace(/```\n?/g, '')
-            .replace(/`/g, '')
-            .split('\n')[0] // Lấy dòng lệnh đầu tiên
-            .trim();
     }
 
     /**
@@ -182,51 +197,6 @@ export class AgentService {
     }
 
     /**
-     * Xây dựng nội dung phản hồi của Assistant
-     */
-    private buildAssistantMessage(
-        command: string,
-        result: TerminalExecutionResult
-    ): { content: string; success: boolean } {
-        let content = '';
-
-        if (result.success) {
-            content = `✓ Lệnh '${command}' thực thi thành công (${result.duration}ms)\n`;
-            content += `📤 Output:\n${result.stdout || '(empty)'}`;
-        } else {
-            content = `✗ Lệnh '${command}' thất bại\n`;
-            content += `❌ Lỗi (${result.exitCode}): ${result.message}\n`;
-            if (result.stderr) {
-                content += `📋 Chi tiết: ${result.stderr}`;
-            }
-        }
-
-        return {
-            content,
-            success: result.success,
-        };
-    }
-
-    /**
-     * Xử lý các lỗi trong quá trình chat
-     */
-    private handleChatError(error: any): string {
-        if (error instanceof BadRequestException) {
-            return `⚠️ Lỗi xác thực: ${error.message}`;
-        }
-
-        if (error.code === 'ECONNREFUSED') {
-            return `⚠️ Không thể kết nối đến LLM Server. Kiểm tra cấu hình.`;
-        }
-
-        if (error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
-            return `⚠️ Timeout hoặc lỗi mạng khi kết nối LLM Server.`;
-        }
-
-        return `⚠️ Lỗi không xác định: ${error.message || 'Unknown error'}`;
-    }
-
-    /**
      * Lấy danh sách lệnh được phép
      */
     getAllowedCommands(): string[] {
@@ -241,7 +211,9 @@ export class AgentService {
         this.logger.log('📝 Session reset');
     }
 
-    private buildLoopSystemPrompt(originalGoal: string, skills: string) {
+    private buildLoopSystemPrompt(originalGoal: string, loadedSkills: string) {
+        const capabilities = this.skillLoader.getCapabilitiesSummary();
+
         return {
             role: 'system',
             content: `
@@ -253,7 +225,16 @@ export class AgentService {
                 - Tránh lặp hành động; ưu tiên giải pháp có thể kiểm chứng được.
 
                 KỸ NĂNG BẠN CÓ:
-                ${skills}
+                ${capabilities}
+
+                # TÀI LIỆU KỸ THUẬT CHI TIẾT (LOADED SKILLS)
+                Dưới đây là hướng dẫn chi tiết cho các công cụ đã được "nạp" vào bộ nhớ:
+                ${loadedSkills}
+
+                ## Sử dụng kĩ năng
+                1. Nếu mục tiêu yêu cầu một công cụ trong REGISTRY nhưng chưa có trong LOADED SKILLS, 
+               hãy thực hiện bước đầu tiên là khám phá hệ thống để tôi tự động nạp thêm context cho bạn.
+                2. Bạn có quyền tự quyết định thứ tự sử dụng công cụ.
 
                 Mục tiêu hiện tại: "${originalGoal}"
 
@@ -269,6 +250,7 @@ export class AgentService {
                 6. Sau thay đổi code, ưu tiên chạy kiểm chứng tối thiểu (build/test/lint nếu khả thi).
                 7. Nếu thất bại lặp lại, đổi chiến thuật; chỉ \`ask_human\` khi thật sự cần.
                 8. Chỉ dùng \`done\` khi mục tiêu đã hoàn tất hoặc user xác nhận dừng.
+                9. Có thể linh hoạt sử dụng tool hoặc không cần dùng tool dựa trên yêu cầu của user (có thể chỉ trả lời mà không cần dùng tool).
 
                 ## USER-INTENT LOCK (BẮT BUỘC)
                 - Trước mỗi quyết định, tự kiểm tra: "Hành động này có phục vụ trực tiếp mục tiêu user không?"

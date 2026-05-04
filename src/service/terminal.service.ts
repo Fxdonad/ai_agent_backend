@@ -39,12 +39,13 @@ export class TerminalService {
             /^node\s+(--version|-v)/i,
             /^git\s+(status|log|branch|diff|add|commit|push|pull|clone)/i,
             /^npx\s+[\w-]+/i,
-            /^(echo|pwd|ls|cat|grep|find)\s+/i,
             /^chmod\s+/i,
             /^mkdir\s+-p\s+/i,
+            /^(echo|pwd|ls|cat|grep|find|base64|printf)\s+/i,
+            /^rm\s+-rf\s+/i,
         ],
-        maxTimeout: 300000, // 5 phút tối đa
-        allowedTools: ['npm', 'node', 'git', 'npx', 'echo', 'pwd', 'ls', 'cat', 'grep', 'find', 'chmod', 'mkdir'],
+        maxTimeout: 600000, // 10 phút tối đa
+        allowedTools: ['npm', 'node', 'git', 'npx', 'echo', 'pwd', 'ls', 'cat', 'grep', 'find', 'chmod', 'mkdir', 'base64', 'printf', 'rm'],
     };
 
     /**

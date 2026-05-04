@@ -1,30 +1,51 @@
-// src/modules/agent/skill-loader.service.ts
 import { Injectable } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import { SKILL_REGISTRY } from 'src/skills/registry';
 
 @Injectable()
 export class SkillLoaderService {
     private readonly skillsDir = path.join(process.cwd(), 'src/skills');
 
+    /**
+     * Cung cấp cho Agent bản danh sách rút gọn để nó "biết mình là ai"
+     */
+    getCapabilitiesSummary(): string {
+        return SKILL_REGISTRY.map(s => `- ${s.name}: ${s.description}`).join('\n');
+    }
+
+    /**
+     * Logic chọn lọc kỹ năng thông minh
+     */
     getRelevantSkills(prompt: string): string {
         const p = prompt.toLowerCase();
-        const activeSkills: string[] = [];
+        
+        // 1. Lọc ra các kỹ năng cần thiết dựa trên Registry
+        const selectedSkills = SKILL_REGISTRY.filter(skill => 
+            // Check mô tả hoặc từ khóa có liên quan đến yêu cầu không
+            skill.keywords.some(k => p.includes(k)) || 
+            this.isSemanticallyRelated(p, skill.description)
+        ).map(s => s.name);
 
-        if (p.includes('hỏi') || p.includes('ask') || p.includes('confirm')) activeSkills.push('ask_human');
-        if (p.includes('folder') || p.includes('cấu trúc') || p.includes('tree')) activeSkills.push('read_structure');
-        if (p.includes('tìm') || p.includes('search') || p.includes('mạng')) activeSkills.push('web_search');
-        if (p.includes('nội dung') || p.includes('grep')) activeSkills.push('search_grep');
-        if (p.includes('file') || p.includes('đọc') || p.includes('ghi') || p.includes('tạo')) activeSkills.push('file_handle');
+        // 2. Luôn mặc định load các kỹ năng sinh tồn
+        const finalSkills = [...new Set([...selectedSkills, 'read_structure', 'file_operation'])];
 
-        // Nếu không khớp từ khóa nào, load mặc định file_handle và read_structure
-        if (activeSkills.length === 0) activeSkills.push('file_handle', 'read_structure');
+        return this.loadSkillsFromFiles(finalSkills);
+    }
 
-        return activeSkills
-            .map(name => {
-                const content = fs.readFileSync(path.join(this.skillsDir, `${name}.md`), 'utf8');
-                return `[SKILL: ${name}]\n${content}`;
-            })
-            .join('\n\n');
+    private isSemanticallyRelated(prompt: string, description: string): boolean {
+        // Sau này có thể dùng Embeddings để so sánh độ tương đồng
+        // Hiện tại dùng logic đơn giản là check một vài từ khóa chung của ngành dev
+        return false; 
+    }
+
+    private loadSkillsFromFiles(names: string[]): string {
+        return names.map(name => {
+            const filePath = path.join(this.skillsDir, `${name}.md`);
+            if (fs.existsSync(filePath)) {
+                return `[DETAILED_SKILL_MANUAL: ${name}]\n${fs.readFileSync(filePath, 'utf8')}`;
+            }
+            return '';
+        }).join('\n\n');
     }
 }

@@ -49,9 +49,12 @@ export class AgentService {
         while (currentStep < this.MAX_STEPS) {
             currentStep++;
             const history = await this.historyService.getContext(this.currentSessionId, 8);
+            const chronologicalHistory = [...history].sort((a, b) => 
+                new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+            );
             const messages = [
                 this.buildLoopSystemPrompt(userInput, relevantSkills),
-                ...history.reverse().map(m => ({
+                ...chronologicalHistory.map(m => ({
                     role: m.role,
                     content: m.role === 'assistant' ? this.formatAssistantContent(m) : m.content
                 }))
@@ -63,6 +66,9 @@ export class AgentService {
 
             const { thought, tool, parameters } = parsed;
             this.logger.log(`Step ${currentStep} | 🧠: ${thought}`);
+            if(parameters.message){
+                this.logger.log(`Agent message | : ${parameters.message}`);
+            }
 
             // Xử lý thoát sớm
             if (tool === 'done') return parameters.summary || "Hoàn thành.";
@@ -77,8 +83,15 @@ export class AgentService {
                 result = await this.handleFileOperation(parameters);
             } else {
                 displayCommand = parameters.command || this.mapToolToCommand(tool, parameters);
-                const exec = await this.terminal.execute(displayCommand, parameters.timeout_ms || 30000);
-                result = exec.stdout || exec.stderr || exec.message;
+                const exec = await this.terminal.execute(displayCommand, parameters.timeout_ms || 60000);
+                const formattedResult = [
+                    `[Execution Status]: ${exec.success ? 'SUCCESS' : 'FAILED'} (Exit Code: ${exec.exitCode})`,
+                    `[Command]: ${displayCommand}`,
+                    exec.stdout ? `[Stdout]:\n${exec.stdout}` : '',
+                    exec.stderr ? `[Stderr]:\n${exec.stderr}` : '',
+                    (!exec.stdout && !exec.stderr) ? `[System Message]: ${exec.message}` : ''
+                ].filter(Boolean).join('\n');
+                result = formattedResult;
             }
 
             // Lưu bước đi vào history
@@ -89,15 +102,18 @@ export class AgentService {
 
     private mapToolToCommand(tool: string, parameters: any): string {
         switch (tool) {
+            case 'get_cwd': // Tool mới
+                return `pwd`;
             case 'read_structure':
-                // Sử dụng find hoặc ls tùy vào logic bạn muốn
-                const depth = parameters.max_depth || 2;
-                return `find . -maxdepth ${depth} -not -path '*/.*'`;
+                const path = parameters.path || '.';
+                const depth = parameters.max_depth || 2; // Tăng lên 2 để Agent nhìn rõ hơn
+                // Lệnh này liệt kê thư mục, loại bỏ các thư mục ẩn và node_modules để tránh quá tải context
+                return `find ${path} -maxdepth ${depth} -not -path '*/.*' -not -path '*node_modules*'`;
 
             case 'search_grep':
                 const pattern = parameters.query || '';
-                const path = parameters.path || '.';
-                return `grep -rnw "${path}" -e "${pattern}"`;
+                const searchPath = parameters.path || '.';
+                return `grep -rnI "${pattern}" "${searchPath}" | head -n 50`;
 
             case 'web_search':
                 // Kết hợp với Brave API key từ env
@@ -152,16 +168,20 @@ export class AgentService {
      * Gọi LLM API
      */
     private async callLLM(messages: any[]): Promise<string> {
+        const controller = new AbortController();
         try {
             const response = await axios.post(
                 `http://${env.get("llm_server.host_ip")}:${env.get("llm_server.host_port")}/v1/chat/completions`,
                 {
                     messages,
                     temperature: 0.1,
-                    max_tokens: 500,
                     response_format: Gemma4e4bConfig.structureResponse,
                 },
-                { timeout: 600000 }
+                { 
+                    timeout: 600000 ,
+                    signal: controller.signal,
+                    headers: { Connection: "keep-alive" }
+                }
             );
 
             return response.data?.choices?.[0]?.message?.content || '';
@@ -222,7 +242,7 @@ export class AgentService {
                 ## MISSION
                 - Thực hiện đúng mục tiêu người dùng với chất lượng production.
                 - Tối ưu cho 3 chuyên môn chính: coding, file CRUD, technical research.
-                - Tránh lặp hành động; ưu tiên giải pháp có thể kiểm chứng được.
+                - Tuyệt đối: không lặp hành động có cùng kết quả trong history, đánh giá kết quả trước để quyết định tiếp.
 
                 KỸ NĂNG BẠN CÓ:
                 ${capabilities}
@@ -235,8 +255,6 @@ export class AgentService {
                 1. Nếu mục tiêu yêu cầu một công cụ trong REGISTRY nhưng chưa có trong LOADED SKILLS, 
                hãy thực hiện bước đầu tiên là khám phá hệ thống để tôi tự động nạp thêm context cho bạn.
                 2. Bạn có quyền tự quyết định thứ tự sử dụng công cụ.
-
-                Mục tiêu hiện tại: "${originalGoal}"
 
                  ## EXECUTION POLICY
                 1. **Ưu tiên ý định user (cao nhất)**: Mọi hành động phải bám trực tiếp vào yêu cầu mới nhất của user.
@@ -263,6 +281,8 @@ export class AgentService {
                 2. Nếu đã có thông tin, hãy thực hiện hành động tiếp theo.
                 3. Nếu ĐÃ HOÀN THÀNH mục tiêu, hãy trả về duy nhất từ khóa: DONE
                 4. Nếu cần sự giúp đỡ của con người hoặc bị kẹt, hãy trả về: ASK_HUMAN <lý do>
+
+                Message from user: "${originalGoal}"
             `
         };
     }

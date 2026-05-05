@@ -54,8 +54,9 @@ export class TerminalService {
      * @param timeout Thời gian chờ tối đa (ms)
      * @returns Kết quả thực thi có cấu trúc
      */
-    async execute(command: string, timeout: number = 30000): Promise<TerminalExecutionResult> {
+    async execute(command: string, timeout: number = 60000): Promise<TerminalExecutionResult> {
         const startTime = Date.now();
+        const { stdout: cwd } = await execPromise('pwd');
 
         // Validate input
         if (!command || typeof command !== 'string') {
@@ -89,15 +90,20 @@ export class TerminalService {
                 stderr: stderr || '',
                 exitCode: 0,
                 duration,
-                message: `Lệnh thực thi thành công sau ${duration}ms`,
+                message: `[CWD]: ${cwd.trim()} | Lệnh thực thi thành công sau ${duration}ms`,
             };
 
             this.logger.log(`Command succeeded: ${trimmedCommand} (${duration}ms)`);
             return result;
         } catch (error: any) {
             const duration = Date.now() - startTime;
+            let currentPath = 'unknown';
+            try {
+                const { stdout } = await execPromise('pwd');
+                currentPath = stdout.trim();
+            } catch { /* ignore */ }
 
-            // Phân loại lỗi
+        
             let message = 'Lỗi thực thi lệnh';
             let exitCode = 1;
 
@@ -119,10 +125,12 @@ export class TerminalService {
                 success: false,
                 command: trimmedCommand,
                 stdout: error.stdout || '',
-                stderr: error.stderr || error.message || 'Unknown error',
+                // CẢI TIẾN: Kết hợp message lỗi vào stderr để Agent đọc được
+                stderr: `[ERROR_TYPE]: ${message}\n[DETAILS]: ${error.stderr || error.message || 'Unknown error'}`,
                 exitCode,
                 duration,
-                message,
+                // CẢI TIẾN: Luôn trả về CWD kể cả khi lỗi
+                message: `[CWD]: ${currentPath} | Lệnh thất bại sau ${duration}ms`,
             };
 
             this.logger.error(`Command failed: ${trimmedCommand} - ${message}`, error);

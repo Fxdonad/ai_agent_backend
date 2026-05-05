@@ -24,5 +24,10 @@ export const SKILL_REGISTRY: SkillMetadata[] = [
         name: 'search_grep',
         description: 'Tìm kiếm chuỗi văn bản hoặc code cụ thể bên trong đống file hỗn độn.',
         keywords: ['grep', 'find text', 'search inside']
+    },
+    {
+        name: 'get_cwd',
+        description: 'Lấy working directory hiện tại.',
+        keywords: ['pwd', 'working directory']
     }
 ];

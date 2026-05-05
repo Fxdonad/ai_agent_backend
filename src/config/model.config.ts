@@ -43,6 +43,7 @@ export const Gemma4e4bConfig = {
                         type: "string",
                         enum: tools.map(tool => tool.name),
                     },
+                    actionSummary: {type: "string"},
                     parameters: {
                         type: "object",
                         properties: {
@@ -55,7 +56,7 @@ export const Gemma4e4bConfig = {
                         additionalProperties: false,
                     },
                 },
-                required: ["thought", "message", "tool", "parameters"],
+                required: ["thought", "message", "tool", "parameters", "actionSummary"],
             },
         },
     },

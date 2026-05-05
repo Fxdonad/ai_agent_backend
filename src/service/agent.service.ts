@@ -64,7 +64,7 @@ export class AgentService {
             const parsed = this.safeParseJSON(llmRawResponse);
             if (!parsed) return "AI trả về định dạng không hợp lệ.";
 
-            const { thought, message, tool, parameters } = parsed;
+            const { thought, message, tool, parameters, actionSummary } = parsed;
             this.logger.log(`Step ${currentStep} | 🧠: ${thought}`);
             if(message){
                 this.logger.log(`Agent message | : ${message}`);
@@ -72,11 +72,11 @@ export class AgentService {
 
             // Xử lý thoát sớm
             if (tool === 'done') {
-                await this.saveStep(tool, thought, "no command", parameters.summary);
+                await this.saveStep(tool, actionSummary, "no command", parameters.summary);
                 return parameters.summary || "Hoàn thành.";
             }
             if (tool === 'ask_human') {
-                await this.saveStep(tool, thought, "no command", parameters.message);
+                await this.saveStep(tool, actionSummary, "no command", parameters.message);
                 return `Agent cần hỗ trợ: ${parameters.message}`;
             }
 
@@ -100,7 +100,7 @@ export class AgentService {
             }
 
             // Lưu bước đi vào history
-            await this.saveStep(tool, thought, displayCommand, result);
+            await this.saveStep(tool, actionSummary, displayCommand, result);
         }
         return "Đã đạt giới hạn xử lý tối đa.";
     }
@@ -131,10 +131,10 @@ export class AgentService {
     }
 
 
-    private async saveStep(tool: string, thought: string, command: string, result: string) {
+    private async saveStep(tool: string, summary: string, command: string, result: string) {
         await this.historyService.saveMessage(this.currentSessionId, {
             role: 'assistant',
-            content: `[${tool.toUpperCase()}] Thought: ${thought} \n Result: ${result}`,
+            content: `[${tool.toUpperCase()}] Summary Action executed: ${summary} \n Result: ${result}`,
             command: command,
             output: result,
         });
@@ -241,6 +241,7 @@ export class AgentService {
                 1. Nếu mục tiêu yêu cầu một công cụ trong REGISTRY nhưng chưa có trong LOADED SKILLS, 
                hãy thực hiện bước đầu tiên là khám phá hệ thống để tôi tự động nạp thêm context cho bạn.
                 2. Bạn có quyền tự quyết định thứ tự sử dụng công cụ.
+                3. Với mỗi response **Bắt buộc tóm tắt** lại hành động, nội dung vừa thực hiện **dưới 300 tokens** trong actionSummary.
 
                  ## EXECUTION POLICY
                 1. **Ưu tiên ý định user (cao nhất)**: Mọi hành động phải bám trực tiếp vào yêu cầu mới nhất của user.

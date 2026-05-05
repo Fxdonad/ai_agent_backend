@@ -27,8 +27,10 @@ export class SkillLoaderService {
             this.isSemanticallyRelated(p, skill.description)
         ).map(s => s.name);
 
-        // 2. Luôn mặc định load các kỹ năng sinh tồn
-        const finalSkills = [...new Set([...selectedSkills, 'ask_human', 'done'])];
+        // 2. Luôn mặc định load các kỹ năng sinh tồn + tối ưu luồng auto mode
+        const finalSkills = [
+            ...new Set([...selectedSkills, 'auto_mode', 'ask_human', 'done']),
+        ];
 
         return this.loadSkillsFromFiles(finalSkills);
     }

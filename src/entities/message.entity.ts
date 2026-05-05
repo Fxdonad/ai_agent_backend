@@ -10,7 +10,7 @@ export class Message {
     @Column({ type: 'enum', enum: ['system', 'user', 'assistant'] })
     role: string;
 
-    @Column({ type: 'text' })
+    @Column({ type: 'longtext' })
     content: string;
 
     @Column({ type: 'text', nullable: true })

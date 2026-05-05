@@ -241,7 +241,7 @@ export class AgentService {
                 1. Nếu mục tiêu yêu cầu một công cụ trong REGISTRY nhưng chưa có trong LOADED SKILLS, 
                hãy thực hiện bước đầu tiên là khám phá hệ thống để tôi tự động nạp thêm context cho bạn.
                 2. Bạn có quyền tự quyết định thứ tự sử dụng công cụ.
-                3. Với mỗi response **Bắt buộc tóm tắt** lại hành động, nội dung vừa thực hiện **dưới 300 tokens** trong actionSummary.
+                3. Với mỗi response **Bắt buộc tóm tắt** lại hành động, nội dung vừa thực hiện **dưới 300 tokens** trong actionSummary, hết mức ngắn gọn.
 
                  ## EXECUTION POLICY
                 1. **Ưu tiên ý định user (cao nhất)**: Mọi hành động phải bám trực tiếp vào yêu cầu mới nhất của user.

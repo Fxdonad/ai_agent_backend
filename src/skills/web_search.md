@@ -18,6 +18,7 @@ Chuyên môn: tra cứu tài liệu bên ngoài khi code local không đủ dữ
 ```json
 {
   "thought": "Cần tra tài liệu chính thức cho lỗi hydration trong React",
+  "message": "Tôi cần tra một vài tài liệu liên quan trên mạng, xin chờ...",
   "tool": "web_search",
   "parameters": {
     "query": "React hydration mismatch best practices",

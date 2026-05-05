@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
-import { SKILL_REGISTRY } from 'src/skills/registry';
+import { tools } from 'src/config/model.config';
 
 @Injectable()
 export class SkillLoaderService {
@@ -11,7 +11,7 @@ export class SkillLoaderService {
      * Cung cấp cho Agent bản danh sách rút gọn để nó "biết mình là ai"
      */
     getCapabilitiesSummary(): string {
-        return SKILL_REGISTRY.map(s => `- ${s.name}: ${s.description}`).join('\n');
+        return tools.map(s => `- ${s.name}: ${s.description}`).join('\n');
     }
 
     /**
@@ -21,14 +21,14 @@ export class SkillLoaderService {
         const p = prompt.toLowerCase();
         
         // 1. Lọc ra các kỹ năng cần thiết dựa trên Registry
-        const selectedSkills = SKILL_REGISTRY.filter(skill => 
+        const selectedSkills = tools.filter(skill => 
             // Check mô tả hoặc từ khóa có liên quan đến yêu cầu không
             skill.keywords.some(k => p.includes(k)) || 
             this.isSemanticallyRelated(p, skill.description)
         ).map(s => s.name);
 
         // 2. Luôn mặc định load các kỹ năng sinh tồn
-        const finalSkills = [...new Set([...selectedSkills, 'read_structure', 'file_operation'])];
+        const finalSkills = [...new Set([...selectedSkills, 'ask_human', 'done'])];
 
         return this.loadSkillsFromFiles(finalSkills);
     }

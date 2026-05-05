@@ -53,7 +53,7 @@ export class AgentService {
                 new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
             );
             const messages = [
-                this.buildLoopSystemPrompt(userInput, relevantSkills),
+                this.buildLoopSystemPrompt(relevantSkills),
                 ...chronologicalHistory.map(m => ({
                     role: m.role,
                     content: m.role === 'assistant' ? this.formatAssistantContent(m) : m.content
@@ -64,34 +64,39 @@ export class AgentService {
             const parsed = this.safeParseJSON(llmRawResponse);
             if (!parsed) return "AI trả về định dạng không hợp lệ.";
 
-            const { thought, tool, parameters } = parsed;
+            const { thought, message, tool, parameters } = parsed;
             this.logger.log(`Step ${currentStep} | 🧠: ${thought}`);
-            if(parameters.message){
-                this.logger.log(`Agent message | : ${parameters.message}`);
+            if(message){
+                this.logger.log(`Agent message | : ${message}`);
             }
 
             // Xử lý thoát sớm
-            if (tool === 'done') return parameters.summary || "Hoàn thành.";
-            if (tool === 'ask_human') return `Agent cần hỗ trợ: ${parameters.message}`;
+            if (tool === 'done') {
+                await this.saveStep(tool, thought, "no command", parameters.summary);
+                return parameters.summary || "Hoàn thành.";
+            }
+            if (tool === 'ask_human') {
+                await this.saveStep(tool, thought, "no command", parameters.message);
+                return `Agent cần hỗ trợ: ${parameters.message}`;
+            }
 
             // Thực thi hành động
             let result = "";
             let displayCommand = "";
 
-            if (tool === 'file_operation') {
-                displayCommand = `File: ${parameters.action} ${parameters.path}`;
-                result = await this.handleFileOperation(parameters);
+            if (tool === 'execute_terminal') {
+                displayCommand = parameters.command;
+                const executeResult = await this.terminal.execute(displayCommand, parameters.timeout_ms || 60000);
+                result = executeResult.stdout || executeResult.message || executeResult.stderr;
             } else {
-                displayCommand = parameters.command || this.mapToolToCommand(tool, parameters);
-                const exec = await this.terminal.execute(displayCommand, parameters.timeout_ms || 60000);
-                const formattedResult = [
-                    `[Execution Status]: ${exec.success ? 'SUCCESS' : 'FAILED'} (Exit Code: ${exec.exitCode})`,
-                    `[Command]: ${displayCommand}`,
-                    exec.stdout ? `[Stdout]:\n${exec.stdout}` : '',
-                    exec.stderr ? `[Stderr]:\n${exec.stderr}` : '',
-                    (!exec.stdout && !exec.stderr) ? `[System Message]: ${exec.message}` : ''
-                ].filter(Boolean).join('\n');
-                result = formattedResult;
+                if (tool === "web_search"){
+                    if(!parameters.query) {
+                        result = "Has no query to search anything, make sure response content exist in parameters.query"
+                    }
+                }
+                const command = this.mapToolToCommand(tool, parameters)
+                const executeResult = await this.terminal.execute(command, parameters.timeout_ms || 60000);
+                result = executeResult.stdout || executeResult.message || executeResult.stderr;
             }
 
             // Lưu bước đi vào history
@@ -102,22 +107,9 @@ export class AgentService {
 
     private mapToolToCommand(tool: string, parameters: any): string {
         switch (tool) {
-            case 'get_cwd': // Tool mới
-                return `pwd`;
-            case 'read_structure':
-                const path = parameters.path || '.';
-                const depth = parameters.max_depth || 2; // Tăng lên 2 để Agent nhìn rõ hơn
-                // Lệnh này liệt kê thư mục, loại bỏ các thư mục ẩn và node_modules để tránh quá tải context
-                return `find ${path} -maxdepth ${depth} -not -path '*/.*' -not -path '*node_modules*'`;
-
-            case 'search_grep':
-                const pattern = parameters.query || '';
-                const searchPath = parameters.path || '.';
-                return `grep -rnI "${pattern}" "${searchPath}" | head -n 50`;
-
             case 'web_search':
                 // Kết hợp với Brave API key từ env
-                const query = encodeURIComponent(parameters.query || '');
+                const query = encodeURIComponent(parameters.query);
                 return `curl -s -H "X-Subscription-Token: ${env.get('brave_search_api_key')}" "https://api.search.brave.com/res/v1/web/search?q=${query}"`;
 
             default:
@@ -138,27 +130,11 @@ export class AgentService {
         }
     }
 
-    private async handleFileOperation(params: any): Promise<string> {
-        const { action, path, content } = params;
-        
-        // Chống lỗi khi content có ký tự đặc biệt bằng cách dùng file tạm hoặc kĩ thuật heredoc
-        switch (action) {
-            case 'read': return (await this.terminal.execute(`cat "${path}"`)).stdout;
-            case 'list': return (await this.terminal.execute(`ls -F "${path}"`)).stdout;
-            case 'mkdir': return (await this.terminal.execute(`mkdir -p "${path}"`)).message;
-            case 'delete': return (await this.terminal.execute(`rm -rf "${path}"`)).message;
-            case 'write':
-                // Sử dụng kĩ thuật base64 để ghi file an toàn tuyệt đối, không sợ vướng ký tự đặc biệt
-                const base64Content = Buffer.from(content).toString('base64');
-                return (await this.terminal.execute(`echo "${base64Content}" | base64 -d > "${path}"`)).message;
-            default: return "Action không hợp lệ";
-        }
-    }
 
     private async saveStep(tool: string, thought: string, command: string, result: string) {
         await this.historyService.saveMessage(this.currentSessionId, {
             role: 'assistant',
-            content: `[${tool.toUpperCase()}] Thought: ${thought}`,
+            content: `[${tool.toUpperCase()}] Thought: ${thought} \n Result: ${result}`,
             command: command,
             output: result,
         });
@@ -200,17 +176,27 @@ export class AgentService {
         const parts: string[] = [];
 
         if (message.command) {
-            parts.push(`Lệnh: ${message.command}`);
+            parts.push(`Lệnh: ${message.command} \n`);
         }
 
         if (message.output) {
             const output = typeof message.output === 'string'
                 ? message.output
                 : JSON.stringify(message.output);
-            const truncated = output.length > 200
-                ? output.substring(0, 200) + '...'
+            const truncated = output.length > 1000
+                ? output.substring(0, 1000) + '...'
                 : output;
-            parts.push(`Kết quả: ${truncated}`);
+            parts.push(`Kết quả: ${truncated} \n`);
+        }
+
+        if(message.content) {
+            const content = typeof message.content === 'string'
+            ? message.content
+            : JSON.stringify(message.content);
+            const truncated = content.length > 1000
+                ? content.substring(0, 1000) + '...'
+                : content;
+            parts.push(`Đã trả lời: ${truncated}`);
         }
 
         return parts.length > 0 ? parts.join('\n') : message.content;
@@ -231,20 +217,20 @@ export class AgentService {
         this.logger.log('📝 Session reset');
     }
 
-    private buildLoopSystemPrompt(originalGoal: string, loadedSkills: string) {
+    private buildLoopSystemPrompt(loadedSkills: string) {
         const capabilities = this.skillLoader.getCapabilitiesSummary();
 
         return {
             role: 'system',
-            content: `
-                # ROLE: Senior Coding Agent (Local LLM, Native VM)
+            content: 
+                `# ROLE: Senior Coding Agent (assistant)
 
                 ## MISSION
                 - Thực hiện đúng mục tiêu người dùng với chất lượng production.
                 - Tối ưu cho 3 chuyên môn chính: coding, file CRUD, technical research.
                 - Tuyệt đối: không lặp hành động có cùng kết quả trong history, đánh giá kết quả trước để quyết định tiếp.
 
-                KỸ NĂNG BẠN CÓ:
+                KHẢ NĂNG BẠN CÓ:
                 ${capabilities}
 
                 # TÀI LIỆU KỸ THUẬT CHI TIẾT (LOADED SKILLS)
@@ -263,7 +249,7 @@ export class AgentService {
                     - (b) Ràng buộc an toàn/bảo mật bắt buộc
                     - (c) Các guideline tối ưu (coding standards, self-correction)
                 3. Không mở rộng scope ngoài yêu cầu user nếu user chưa yêu cầu rõ.
-                4. Discover đúng phạm vi bằng \`read_structure\` hoặc \`search_grep\` trước khi sửa.
+                4. Discover đúng phạm vi bằng lệnh call phù hợp vào \`execute_terminal\` trước khi sửa.
                 5. Chọn đúng tool theo chuyên môn, không trộn mục đích.
                 6. Sau thay đổi code, ưu tiên chạy kiểm chứng tối thiểu (build/test/lint nếu khả thi).
                 7. Nếu thất bại lặp lại, đổi chiến thuật; chỉ \`ask_human\` khi thật sự cần.
@@ -280,10 +266,7 @@ export class AgentService {
                 1. Nếu bạn cần thông tin, hãy đưa ra lệnh terminal để lấy thông tin (ls, cat, grep...).
                 2. Nếu đã có thông tin, hãy thực hiện hành động tiếp theo.
                 3. Nếu ĐÃ HOÀN THÀNH mục tiêu, hãy trả về duy nhất từ khóa: DONE
-                4. Nếu cần sự giúp đỡ của con người hoặc bị kẹt, hãy trả về: ASK_HUMAN <lý do>
-
-                Message from user: "${originalGoal}"
-            `
+                4. Nếu cần sự giúp đỡ của con người hoặc bị kẹt, hãy trả về: ASK_HUMAN <lý do>`
         };
     }
 }

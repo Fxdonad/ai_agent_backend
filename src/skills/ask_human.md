@@ -19,6 +19,7 @@ Chuyên môn: thu thập quyết định hoặc thông tin chỉ người dùng 
 ```json
 {
   "thought": "Cần API key để tiếp tục tích hợp dịch vụ",
+  "message": "Bạn có thể cung cấp API key của dịch vụ X cho tôi không ?",
   "tool": "ask_human",
   "parameters": {
     "query": "Bạn cung cấp giúp API key của dịch vụ X (có thể che bớt nếu cần)?"

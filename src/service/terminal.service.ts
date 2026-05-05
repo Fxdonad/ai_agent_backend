@@ -86,8 +86,8 @@ export class TerminalService {
             const result: TerminalExecutionResult = {
                 success: true,
                 command: trimmedCommand,
-                stdout: stdout || '',
-                stderr: stderr || '',
+                stdout: `[CWD]: ${cwd.trim()} |` + stdout,
+                stderr: `[CWD]: ${cwd.trim()} |` + stderr,
                 exitCode: 0,
                 duration,
                 message: `[CWD]: ${cwd.trim()} | Lệnh thực thi thành công sau ${duration}ms`,

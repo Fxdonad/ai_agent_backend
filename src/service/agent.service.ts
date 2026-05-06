@@ -138,6 +138,8 @@ export class AgentService {
           if (!parameters.query) {
             result =
               'Has no query to search anything, make sure response content exist in parameters.query';
+              await this.saveStep(tool, thought, "N/A", result);
+            continue;
           }
         }
         const command = this.mapToolToCommand(tool, parameters);

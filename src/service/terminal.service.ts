@@ -41,7 +41,7 @@ export class TerminalService {
       /^npx\s+[\w-]+(?:\s+.*)?$/i,
       /^chmod\s+.+$/i,
       /^mkdir\s+-p(?:\s+.+)?$/i,
-      /^(echo|pwd|ls|cat|grep|find|base64|printf|curl|touch)(?:\s+.*)?$/i,
+      /^(echo|pwd|ls|cat|grep|find|base64|printf|curl|touch|cd)(?:\s+.*)?$/i,
       /^rm\s+-rf(?:\s+.+)?$/i,
     ],
     maxTimeout: 600000, // 10 phút tối đa
@@ -63,6 +63,7 @@ export class TerminalService {
       'rm',
       'curl',
       'touch',
+      'cd'
     ],
   };
 
@@ -83,7 +84,7 @@ export class TerminalService {
     if (!command || typeof command !== 'string') {
       return this.createErrorResult(
         command,
-        'Lệnh không hợp lệ hoặc rỗng',
+        'Lệnh không hợp lệ hoặc rỗng, hãy check parameters.command có trả về không',
         400,
         startTime,
       );

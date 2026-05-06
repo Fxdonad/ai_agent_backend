@@ -71,14 +71,13 @@ export const Gemma4e4bConfig = ({ autoMode, modelName }: GemmaConfigProps) => {
               type: 'string',
               enum: tools.map((tool) => tool.name),
             },
-            actionSummary: { type: 'string' },
+            actionSummary: { type: 'string', description: "Summary this response to push in the next context" },
             parameters: {
               type: 'object',
               properties: {
-                command: { type: 'string' },
-                timeout_ms: { type: 'integer' },
-                query: { type: 'string' },
-                result: { type: 'string' },
+                command: { type: 'string', desciption: "Terminal command response only" },
+                timeout_ms: { type: 'integer', description: "Timeout set for waiting a execute action" },
+                query: { type: 'string', description: "Only use by search action"  },
               },
               // Quan trọng: Không để required ở đây để tránh lỗi chéo giữa các tool
               additionalProperties: false,

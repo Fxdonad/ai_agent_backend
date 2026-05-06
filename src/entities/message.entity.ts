@@ -13,10 +13,10 @@ export class Message {
     @Column({ type: 'longtext' })
     content: string;
 
-    @Column({ type: 'text', nullable: true })
+    @Column({ type: 'longtext', nullable: true })
     command: string;
 
-    @Column({ type: 'text', nullable: true })
+    @Column({ type: 'longtext', nullable: true })
     output: string;
 
     @Column({ type: 'json', nullable: true })

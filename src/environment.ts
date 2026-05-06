@@ -18,6 +18,9 @@ interface ConfigSchema {
         username: string;
         password: string;
         database: string;
+    };
+    discord: {
+        token: string
     }
 }
 
@@ -91,6 +94,13 @@ const env = convict<ConfigSchema>({
             default: "",
             env: "DB_NAME",
             doc: ""
+        }
+    },
+    discord: {
+        token: {
+            format: String,
+            default: "",
+            env: "DISCORD_TOKEN",
         }
     }
 });

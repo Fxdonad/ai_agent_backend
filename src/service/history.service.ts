@@ -1,9 +1,6 @@
 // src/modules/history/history.service.ts
 import { Injectable } from '@nestjs/common';
-import { Message } from 'src/entities/message.entity';
-import { Session } from 'src/entities/session.entity';
 import { MessageRepository, SessionRepository } from 'src/repository';
-import { Repository } from 'typeorm';
 
 @Injectable()
 export class HistoryService {

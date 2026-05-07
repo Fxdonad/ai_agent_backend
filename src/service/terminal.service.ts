@@ -30,42 +30,16 @@ interface WhitelistConfig {
 @Injectable()
 export class TerminalService {
   private readonly logger = new Logger(TerminalService.name);
-  private readonly whitelistConfig: WhitelistConfig = {
-    // Các pattern lệnh được phép thực thi
-    patterns: [
-      /^npm\s+(install|run|start|build|test|list)(?:\s+.*)?$/i,
-      /^npm\s+run\s+migration:(run|revert|generate)(?:\s+.*)?$/i,
-      /^npm\s+run\s+seed:run(?:\s+.*)?$/i,
-      /^node(?:\s+(--version|-v))?$/i,
-      /^git\s+(status|log|branch|diff|add|commit|push|pull|clone)(?:\s+.*)?$/i,
-      /^npx\s+[\w-]+(?:\s+.*)?$/i,
-      /^chmod\s+.+$/i,
-      /^mkdir\s+-p(?:\s+.+)?$/i,
-      /^(echo|pwd|ls|cat|grep|find|base64|printf|curl|touch|cd)(?:\s+.*)?$/i,
-      /^rm\s+-rf(?:\s+.+)?$/i,
-    ],
-    maxTimeout: 600000, // 10 phút tối đa
-    allowedTools: [
-      'npm',
-      'node',
-      'git',
-      'npx',
-      'echo',
-      'pwd',
-      'ls',
-      'cat',
-      'grep',
-      'find',
-      'chmod',
-      'mkdir',
-      'base64',
-      'printf',
-      'rm',
-      'curl',
-      'touch',
-      'cd'
-    ],
-  };
+  // Danh sách các lệnh/từ khóa bị coi là nguy hiểm cần chặn hoàn toàn hoặc yêu cầu sudo cụ thể
+  private readonly restrictedKeywords = [
+    'sudo',       // Chặn sudo trực tiếp để tránh chiếm quyền root
+    'ufw',        // Firewall
+    'iptables',   // Network rules
+    'mkfs',       // Format ổ đĩa
+    'dd',         // Ghi đè block (nguy hiểm cho ổ cứng)
+    'reboot', 
+    'shutdown'
+  ];
 
   /**
    * Thực thi lệnh terminal với xác thực và error handling
@@ -80,51 +54,36 @@ export class TerminalService {
     const startTime = Date.now();
     const { stdout: cwd } = await execPromise('pwd');
 
-    // Validate input
     if (!command || typeof command !== 'string') {
-      return this.createErrorResult(
-        command,
-        'Lệnh không hợp lệ hoặc rỗng, hãy check parameters.command có trả về không',
-        400,
-        startTime,
-      );
+      return this.createErrorResult(command, 'Lệnh rỗng', 400, startTime);
     }
 
     const trimmedCommand = command.trim();
 
-    // Kiểm tra whitelist
-    if (!this.isCommandWhitelisted(trimmedCommand)) {
-      const message = `Lệnh '${trimmedCommand}' không được phép thực thi (security policy)`;
-      this.logger.warn(`Blocked command: ${trimmedCommand}`);
-      return this.createErrorResult(trimmedCommand, message, 403, startTime);
+    // KIỂM TRA QUYỀN (Thay thế whitelist)
+    const permissionCheck = this.checkCommandPermission(trimmedCommand);
+    if (!permissionCheck.allowed) {
+      this.logger.warn(`Permission Denied: ${trimmedCommand}`);
+      return this.createErrorResult(trimmedCommand, permissionCheck.reason, 403, startTime);
     }
 
-    // Validate timeout
-    if (timeout < 1000 || timeout > this.whitelistConfig.maxTimeout) {
-      timeout = Math.min(timeout, this.whitelistConfig.maxTimeout);
-    }
+    // Validate timeout (giữ nguyên)
+    if (timeout < 1000 || timeout > 600000) timeout = 60000;
 
     try {
-      this.logger.debug(`Executing command: ${trimmedCommand}`);
-
-      const { stdout, stderr } = await this.executeWithTimeout(
-        trimmedCommand,
-        timeout,
-      );
+      this.logger.debug(`Executing: ${trimmedCommand}`);
+      const { stdout, stderr } = await this.executeWithTimeout(trimmedCommand, timeout);
       const duration = Date.now() - startTime;
 
-      const result: TerminalExecutionResult = {
+      return {
         success: true,
         command: trimmedCommand,
-        stdout: `[CWD]: ${cwd.trim()} |` + stdout,
-        stderr: `[CWD]: ${cwd.trim()} |` + stderr,
+        stdout: `[CWD]: ${cwd.trim()}\n${stdout}`,
+        stderr: stderr,
         exitCode: 0,
         duration,
-        message: `[CWD]: ${cwd.trim()} | Lệnh thực thi thành công sau ${duration}ms`,
+        message: `Thành công (${duration}ms)`,
       };
-
-      this.logger.log(`Command succeeded: ${trimmedCommand} (${duration}ms)`);
-      return result;
     } catch (error: any) {
       const duration = Date.now() - startTime;
       let currentPath = 'unknown';
@@ -172,6 +131,31 @@ export class TerminalService {
     }
   }
 
+  private checkCommandPermission(command: string): { allowed: boolean; reason: string } {
+    const lowerCommand = command.toLowerCase();
+
+    // 1. Kiểm tra các từ khóa bị cấm tuyệt đối (Blacklist)
+    for (const keyword of this.restrictedKeywords) {
+      if (lowerCommand.includes(keyword)) {
+        return { 
+            allowed: false, 
+            reason: `Lệnh chứa từ khóa nhạy cảm '${keyword}'. Bạn không có quyền thực thi lệnh hệ thống cấp cao.` 
+        };
+      }
+    }
+
+    // 2. Kiểm tra các lệnh phá hoại mạnh (ví dụ rm -rf /)
+    if (lowerCommand.includes('rm') && lowerCommand.includes('-rf') && (lowerCommand.includes(' /') || lowerCommand.includes(' *'))) {
+        return {
+            allowed: false,
+            reason: "Cảnh báo: Hành động xóa diện rộng bị từ chối để bảo vệ hệ thống."
+        };
+    }
+
+    // Mọi lệnh khác được coi là được phép (Free movement)
+    return { allowed: true, reason: '' };
+  }
+
   /**
    * Thực thi lệnh với timeout
    */
@@ -198,29 +182,6 @@ export class TerminalService {
   }
 
   /**
-   * Kiểm tra xem lệnh có trong whitelist không
-   */
-  private isCommandWhitelisted(command: string): boolean {
-    const commandSegments = this.splitCommandSegments(command);
-    if (commandSegments.length === 0) return false;
-
-    return commandSegments.every((segment) =>
-      this.whitelistConfig.patterns.some((pattern) => pattern.test(segment)),
-    );
-  }
-
-  /**
-   * Tách command theo toán tử nối lệnh để validate từng phần riêng biệt.
-   * Ví dụ: "git status && ls -la" => ["git status", "ls -la"]
-   */
-  private splitCommandSegments(command: string): string[] {
-    return command
-      .split(/&&|\|\||;|\n/)
-      .map((segment) => segment.trim())
-      .filter(Boolean);
-  }
-
-  /**
    * Tạo kết quả lỗi
    */
   private createErrorResult(
@@ -240,18 +201,4 @@ export class TerminalService {
     };
   }
 
-  /**
-   * Lấy danh sách các lệnh được whitelist
-   */
-  getAllowedCommands(): string[] {
-    return this.whitelistConfig.allowedTools;
-  }
-
-  /**
-   * Thêm pattern mới vào whitelist (chỉ cho admin)
-   */
-  addWhitelistPattern(pattern: RegExp): void {
-    this.whitelistConfig.patterns.push(pattern);
-    this.logger.log(`Added whitelist pattern: ${pattern.source}`);
-  }
 }

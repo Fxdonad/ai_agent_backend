@@ -4,7 +4,7 @@ export interface SkillMetadata {
   keywords: string[]; // Dùng để fallback hoặc hỗ trợ lọc nhanh
 }
 
-interface GemmaConfigProps {
+interface ConfigProps {
   autoMode: boolean;
   modelName: string;
 }
@@ -47,7 +47,7 @@ export const tools: SkillMetadata[] = [
   },
 ];
 
-export const Gemma4e4bConfig = ({ autoMode, modelName }: GemmaConfigProps) => {
+export const SendRequestFormatConfig = ({ autoMode, modelName }: ConfigProps) => {
   if (!autoMode) {
     return {
       modelName,

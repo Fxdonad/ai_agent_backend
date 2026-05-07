@@ -5,7 +5,7 @@ import env from '../environment';
 import { TerminalService, TerminalExecutionResult } from './terminal.service';
 import { SkillLoaderService } from './skill-loader.service';
 import { HistoryService } from 'src/service/history.service';
-import { Gemma4e4bConfig } from 'src/config/model.config';
+import { SendRequestFormatConfig } from 'src/config/model.config';
 
 /**
  * Agent Service - Orchestrates LLM interaction with Terminal execution
@@ -206,7 +206,7 @@ export class AgentService {
     autoMode: boolean = true,
   ): Promise<string> {
     const controller = new AbortController();
-    const buildStructureRes = Gemma4e4bConfig({
+    const buildStructureRes = SendRequestFormatConfig({
       autoMode: autoMode,
       modelName: 'gemma-4-e4b',
     });
@@ -271,13 +271,6 @@ export class AgentService {
     }
 
     return parts.length > 0 ? parts.join('\n') : message.content;
-  }
-
-  /**
-   * Lấy danh sách lệnh được phép
-   */
-  getAllowedCommands(): string[] {
-    return this.terminal.getAllowedCommands();
   }
 
   /**

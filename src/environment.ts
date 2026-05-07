@@ -20,7 +20,8 @@ interface ConfigSchema {
         database: string;
     };
     discord: {
-        token: string
+        token: string;
+        serverId: string;
     }
 }
 
@@ -101,6 +102,11 @@ const env = convict<ConfigSchema>({
             format: String,
             default: "",
             env: "DISCORD_TOKEN",
+        },
+        serverId: {
+            format: String,
+            default: "",
+            env: "DISCORD_ID"
         }
     }
 });

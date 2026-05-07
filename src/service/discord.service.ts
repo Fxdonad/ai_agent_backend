@@ -1,65 +1,115 @@
 // src/service/discord.service.ts
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
-import { Client, GatewayIntentBits, Events } from 'discord.js';
-import { InjectRepository } from '@nestjs/typeorm'; // Import này
-import { Repository } from 'typeorm';             // Import này
-import { Message as MessageEntity } from '../entities/message.entity'; // Thực thể của bạn
+import { Injectable, OnModuleInit, OnModuleDestroy, Logger } from '@nestjs/common';
+import { 
+  Client, GatewayIntentBits, Events, Message, Interaction, 
+  REST, Routes, SlashCommandBuilder, TextChannel 
+} from 'discord.js';
 import env from "../environment";
-import { MessageRepository } from 'src/repository';
 
 @Injectable()
-export class DiscordService implements OnModuleInit {
+export class DiscordService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DiscordService.name);
-  private client: Client;
+  public readonly client: Client;
 
-  constructor(
-    private readonly messageRepo: MessageRepository,
-  ) {
+  constructor() {
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent, // Bắt buộc để đọc nội dung tin nhắn
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers,
       ],
     });
   }
 
   async onModuleInit() {
-    await this.setupBot();
+    this.initEvents();
+    await this.client.login(env.get('discord.token'));
   }
 
-  private async setupBot() {
-    const token = env.get('discord.token');
-    this.client.once(Events.ClientReady, (c) => {
-        this.logger.log(`Ready! Logged in as ${c.user.tag}`);
-      });
-
-    this.client.on(Events.MessageCreate, async (message) => {
-      // 1. Bỏ qua tin nhắn của bot để tránh vòng lặp vô tận
-      if (message.author.bot) return;
-
-      this.logger.log(`Nhận tin nhắn từ ${message.author.username}: ${message.content}`);
-
-      // 2. Lưu tin nhắn vào Database (MySQL)
-      try {
-        const newMessage = this.messageRepo.create({
-          // Giả sử entity Message của bạn có các trường này
-          // content: message.content,
-          // author: message.author.username,
-          // discordId: message.id,
-          // createdAt: new Date()
-        });
-        // await this.messageRepo.save(newMessage); 
-      } catch (dbError) {
-        this.logger.error('Lỗi lưu DB:', dbError);
-      }
-
-      // 3. Xử lý lệnh hoặc tích hợp logic Chat (Ví dụ: AI hoặc Rep theo từ khóa)
-      if (message.content.toLowerCase().includes('hello bot')) {
-        await message.reply(`Chào ${message.author.username}, mình là Bot từ NestJS!`);
-      }
+  private initEvents() {
+    this.client.once(Events.ClientReady, async (c) => {
+      this.logger.log(`🚀 Bot đã sẵn sàng: ${c.user.tag}`);
+      await this.registerSlashCommands();
     });
 
-    await this.client.login(token);
+    this.client.on(Events.MessageCreate, (msg) => this.handleMessage(msg));
+    this.client.on(Events.InteractionCreate, (int) => this.handleInteraction(int));
+  }
+
+  // --- Logic Xử lý tin nhắn (Passive) ---
+  private async handleMessage(message: Message) {
+    if (message.author.bot) return;
+
+    if (message.content.toLowerCase() === '!ping') {
+      await message.reply('Pong! Backend vẫn đang phản hồi tốt.');
+    }
+  }
+
+  // --- Logic Xử lý Lệnh Slash (Active) ---
+  private async handleInteraction(interaction: Interaction) {
+    if (!interaction.isChatInputCommand()) return;
+
+    // Kiểm tra quyền Admin (Ví dụ)
+    if (!interaction.memberPermissions?.has('Administrator')) {
+      return interaction.reply({ content: 'Bạn không có quyền thực hiện lệnh này!', ephemeral: true });
+    }
+
+    const { commandName, options } = interaction;
+
+    switch (commandName) {
+      case 'status':
+        await interaction.reply({ 
+          content: `✅ Uptime: ${Math.floor(process.uptime())}s`, 
+          ephemeral: true 
+        });
+        break;
+
+      case 'clear_cache':
+        const type = options.getString('type');
+        // Logic nghiệp vụ ở đây
+        await interaction.reply(`🚀 Đã làm sạch bộ nhớ: ${type}`);
+        break;
+    }
+  }
+
+  // --- Đăng ký Lệnh ---
+  private async registerSlashCommands() {
+    if (!this.client.user) return;
+
+    const commands = [
+      new SlashCommandBuilder()
+        .setName('status')
+        .setDescription('Kiểm tra trạng thái backend'),
+      new SlashCommandBuilder()
+        .setName('clear_cache')
+        .setDescription('Xóa cache hệ thống')
+        .addStringOption(opt => opt.setName('type').setDescription('Chọn loại cache').setRequired(true)
+          .addChoices({ name: 'Database', value: 'db' }, { name: 'Session', value: 'session' })),
+    ];
+
+    const rest = new REST({ version: '10' }).setToken(env.get('discord.token'));
+    const serverId = env.get('discord.serverId')
+    try {
+      await rest.put(
+        Routes.applicationGuildCommands(this.client.user.id, serverId),
+        { body: commands.map(c => c.toJSON()) }
+      );
+      this.logger.log('✅ Đã đồng bộ Slash Commands!');
+    } catch (error) {
+      this.logger.error('❌ Lỗi đăng ký lệnh:', error);
+    }
+  }
+
+  // --- Hàm hỗ trợ gửi tin nhắn từ Backend ---
+  async notify(channelId: string, content: string) {
+    const channel = await this.client.channels.fetch(channelId);
+    if (channel instanceof TextChannel) {
+      await channel.send(content);
+    }
+  }
+
+  async onModuleDestroy() {
+    this.client.destroy();
   }
 }
